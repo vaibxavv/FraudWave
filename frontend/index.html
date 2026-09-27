@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FraudWave | Voice Clone Detection & Defense Platform</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Ambient background glow -->
+  <div class="glow-orb orb-1"></div>
+  <div class="glow-orb orb-2"></div>
+
+  <!-- Navigation -->
+  <header class="navbar">
+    <div class="nav-brand">
+      <div class="brand-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2v20M17 5v14M7 8v8M22 10v4M2 11v2"/>
+        </svg>
+      </div>
+      <span class="brand-name">Fraud<span>Wave</span></span>
+    </div>
+    <div class="nav-status">
+      <span class="status-pulse"></span>
+      <span class="status-text">ENGINE ACTIVE (PORT 8000)</span>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <main class="container">
+    <section class="hero-section">
+      <div class="hero-badge">AI Acoustic Biometric Firewall</div>
+      <h1 class="hero-title">Defend Voice Channels Against <span class="gradient-text">Generative Impersonation</span></h1>
+      <p class="hero-subtitle">
+        Real-time acoustic biomarker decomposition for deepfake detection, neural vocoder artifact isolation, and automated transaction intervention.
+      </p>
+    </section>
+
+    <!-- Core Detection Studio -->
+    <section class="studio-grid">
+      <!-- Input Card -->
+      <div class="glass-card card-input">
+        <div class="card-header">
+          <h3>1. Audio Acquisition</h3>
+          <span class="card-tag">PCM 16kHz</span>
+        </div>
+
+        <!-- Mode Selector -->
+        <div class="mode-tabs">
+          <button id="tab-record" class="tab-btn active">Live Microphone</button>
+          <button id="tab-upload" class="tab-btn">Upload Audio</button>
+        </div>
+
+        <!-- Recording Interface -->
+        <div id="panel-record" class="tab-panel active">
+          <div class="audio-visualizer-container">
+            <canvas id="visualizer" width="400" height="120"></canvas>
+            <div id="recording-timer" class="timer-tag">00:00</div>
+          </div>
+          <div class="btn-group">
+            <button id="btn-start" class="btn btn-record">
+              <span class="rec-dot"></span> Record Sample
+            </button>
+            <button id="btn-stop" class="btn btn-secondary" disabled>Stop</button>
+          </div>
+        </div>
+
+        <!-- Upload Interface -->
+        <div id="panel-upload" class="tab-panel">
+          <div class="drop-zone" id="drop-zone">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+            <p>Drag and drop audio file here or <span class="link-span">browse</span></p>
+            <span class="file-hint">Supported: .WAV, .MP3, .OGG, .WEBM</span>
+            <input type="file" id="file-input" accept="audio/*" hidden />
+          </div>
+          <div id="file-selected-name" class="selected-file-label"></div>
+        </div>
+
+        <button id="btn-analyze" class="btn btn-primary btn-block" disabled>
+          Run Security Scan
+        </button>
+      </div>
+
+      <!-- Results Card -->
+      <div class="glass-card card-output">
+        <div class="card-header">
+          <h3>2. Diagnostic Telemetry</h3>
+          <span id="latency-tag" class="card-tag">Ready</span>
+        </div>
+
+        <div class="result-placeholder" id="placeholder-view">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M12 6v6l4 2"/>
+          </svg>
+          <p>Awaiting audio input for acoustic decomposition.</p>
+        </div>
+
+        <div class="result-content hidden" id="analysis-view">
+          <!-- Risk Banner -->
+          <div class="risk-banner" id="risk-banner">
+            <div class="risk-meta">
+              <span class="risk-label" id="risk-label">ANALYSIS VERDICT</span>
+              <h2 class="verdict-text" id="verdict-text">Likely Genuine Voice</h2>
+            </div>
+            <div class="score-circle">
+              <span class="score-val" id="score-val">0%</span>
+              <span class="score-unit">SYNTHETIC</span>
+            </div>
+          </div>
+
+          <!-- Progress Bar -->
+          <div class="meter-wrapper">
+            <div class="meter-labels">
+              <span>Biometric Certainty</span>
+              <span id="meter-percent">0%</span>
+            </div>
+            <div class="meter-track">
+              <div class="meter-fill" id="meter-fill"></div>
+            </div>
+          </div>
+
+          <!-- Recommendation & Dynamic Challenge Section -->
+          <div class="protocol-box">
+            <h4>Recommended Countermeasure</h4>
+            <p id="recommendation-text">--</p>
+            <div id="challenge-container" class="hidden">
+              <h5 class="challenge-title">Security Challenge Questions:</h5>
+              <ul id="challenge-list" class="challenge-list"></ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Real-Time Audit History Table -->
+    <section class="history-section">
+      <div class="section-title-wrap">
+        <h2>Verification Audit Trail</h2>
+        <button id="btn-refresh" class="btn-sm">Refresh Logs</button>
+      </div>
+      <div class="table-container">
+        <table class="audit-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Source Filename</th>
+              <th>Probability</th>
+              <th>Risk Level</th>
+              <th>Latency</th>
+            </tr>
+          </thead>
+          <tbody id="history-rows">
+            <tr><td colspan="5" class="empty-cell">Loading audit logs...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
