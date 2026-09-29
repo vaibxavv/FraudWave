@@ -7,7 +7,7 @@ import librosa
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="FraudWave Biometric Core", version="3.1.0")
+app = FastAPI(title="FraudWave Biometric Core", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,74 +19,60 @@ app.add_middleware(
 
 history_db = []
 
-def extract_deepfake_biomarkers(y: np.ndarray, sr: int):
-    """
-    Mathematical discrimination between biological vocal tract resonance
-    and neural vocoder phase artifacts. Zero dependency on untrained weights.
-    """
-    # 1. Strip edge silence
-    y_trimmed, _ = librosa.effects.trim(y, top_db=20)
-    if len(y_trimmed) >= sr * 0.5:
-        y = y_trimmed
+def extract_biometric_features(y: np.ndarray, sr: int):
+    # 1. Noise gate & Trim
+    y_trim, _ = librosa.effects.trim(y, top_db=25)
+    if len(y_trim) > sr * 0.5:
+        y = y_trim
 
-    # 2. Extract Spectral Contrast (Vocoders fail to match natural speech peak-to-valley ratio)
-    contrast = librosa.feature.spectral_contrast(y=y, sr=sr, n_bands=6)
-    mean_contrast = float(np.mean(contrast))
+    # 2. MFCC & Delta analysis (Biological vocal tract dynamics)
+    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+    mfcc_delta = librosa.feature.delta(mfcc)
+    delta_variance = float(np.mean(np.var(mfcc_delta, axis=1)))
 
-    # 3. Fundamental Frequency (F0) Dynamics - Biological pitch variation
-    f0, voiced_flag, _ = librosa.pyin(
-        y, 
-        fmin=librosa.note_to_hz('C2'), 
-        fmax=librosa.note_to_hz('C7'), 
-        sr=sr
-    )
-    voiced_f0 = f0[~np.isnan(f0)]
-    f0_variance = float(np.std(voiced_f0)) if len(voiced_f0) > 10 else 0.0
+    # 3. Spectral Flatness
+    flatness = float(np.mean(librosa.feature.spectral_flatness(y=y)))
 
-    # 4. Zero Crossing Rate (ZCR) Variance
-    # Artificial speech has rigid, repetitive zero-crossing distributions
+    # 4. Zero Crossing Rate (ZCR) Stability
     zcr = librosa.feature.zero_crossing_rate(y=y)
-    zcr_std = float(np.std(zcr))
+    zcr_mean = float(np.mean(zcr))
 
-    # 5. High-Frequency Spectral Roll-off vs Mid-band Energy
-    # Vocoders (HiFiGAN, MelGAN) typically demonstrate spectral artifacts above 6kHz
-    rolloff = float(np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=0.85)))
+    # 5. Harmonic to Percussive Ratio
+    y_harm, y_perc = librosa.effects.hpss(y)
+    harm_power = float(np.mean(y_harm ** 2))
+    total_power = float(np.mean(y ** 2)) + 1e-9
+    hnr = harm_power / total_power
+
+    # ------------------- ROBUST DISCRIMINATOR -------------------
+    # Real speech has high delta dynamics (natural speech transitions) and low spectral flatness
+    # Cloned/TTS speech has compressed delta dynamics or unnatural vocoder buzz
     
-    # 6. Harmonic-to-Noise Ratio (HNR proxy)
-    harm, perc = librosa.effects.hpss(y)
-    harm_energy = float(np.mean(harm ** 2))
-    total_energy = float(np.mean(y ** 2)) + 1e-9
-    hnr_ratio = harm_energy / total_energy
+    score = 18.0  # Base natural voice anchor
 
-    # ------------------- CALIBRATED SCORING ENGINE -------------------
-    # Base authentic human voice starts at a clean ~15.0%
-    anomaly_score = 15.0
+    # Delta Variance check (Humans > 1.8, Vocoders often < 1.2 or > 3.5 unnatural)
+    if delta_variance < 1.3:
+        score += 35.0  # Robotic static transitions
+    elif delta_variance > 3.8:
+        score += 30.0  # Glitchy phase vocoder artifacts
 
-    # Test 1: Pitch Dynamic Expressiveness (Real humans have natural inflection > 16.0 Hz)
-    if f0_variance < 8.0 and len(voiced_f0) > 10:
-        anomaly_score += 32.0  # Synthetic robotic pitch lock
-    elif f0_variance < 14.0 and len(voiced_f0) > 10:
-        anomaly_score += 18.0
-    elif f0_variance > 22.0:
-        anomaly_score -= 8.0   # Highly organic expressive speech
+    # Flatness check (Natural vocal cords have distinct harmonic peaks)
+    if flatness > 0.02:
+        score += 25.0
+    elif flatness < 0.005:
+        score -= 6.0   # Clear biological resonance
 
-    # Test 2: Spectral Contrast Dynamics (Natural vocal tracks have rich contrast > 22)
-    if mean_contrast < 18.0:
-        anomaly_score += 28.0  # Smudged/flat synthetic spectrum
-    elif mean_contrast > 23.5:
-        anomaly_score -= 6.0   # Rich harmonic formant structure
+    # Harmonic richness check
+    if hnr < 0.30:
+        score += 20.0
+    elif hnr > 0.55:
+        score -= 8.0   # Strong vocal resonance reward
 
-    # Test 3: High-Frequency Vocoder Phase Cutoff (Synthetic speech boundary ~3.8kHz to 5.2kHz)
-    if 3600 < rolloff < 5400 and zcr_std < 0.035:
-        anomaly_score += 26.0
+    # ZCR check
+    if zcr_mean > 0.12:
+        score += 15.0
 
-    # Test 4: Harmonic integrity
-    if hnr_ratio < 0.28:
-        anomaly_score += 15.0
-
-    # Controlled bounded synthetic probability (12.4% to 94.8%)
-    prob = round(float(np.clip(anomaly_score, 12.4, 94.8)), 1)
-    return prob
+    final_prob = round(float(np.clip(score, 14.2, 94.6)), 1)
+    return final_prob
 
 @app.post("/analyze")
 async def analyze_voice(file: UploadFile = File(...)):
@@ -106,48 +92,27 @@ async def analyze_voice(file: UploadFile = File(...)):
         except Exception:
             y, sr = librosa.load(io.BytesIO(contents), sr=16000, mono=True)
     except Exception as e:
-        return {
-            "error": f"Audio processing failed: {str(e)}",
-            "probability": 15.0,
-            "risk_level": "ERROR",
-            "verdict": "UNREADABLE AUDIO STREAM"
-        }
+        return {"error": f"Audio processing failed: {str(e)}", "probability": 15.0, "risk_level": "ERROR"}
 
-    # Amplitude normalization
-    max_val = np.max(np.abs(y))
-    if max_val > 0:
-        y = y / max_val
+    if len(y) < 8000:
+        return {"error": "Audio too short", "probability": 15.0, "risk_level": "LOW", "verdict": "INSUFFICIENT LENGTH"}
 
-    if len(y) < 6000: # < 0.35s
-        return {
-            "error": "Audio sample is too short. Speak for at least 2-3 seconds.",
-            "probability": 14.0,
-            "risk_level": "LOW",
-            "verdict": "INSUFFICIENT SAMPLE LENGTH"
-        }
-
-    prob = extract_deepfake_biomarkers(y, sr)
+    prob = extract_biometric_features(y, sr)
     latency = round((time.time() - start_time) * 1000, 1)
 
     is_fake = prob >= 50.0
     risk_level = "CRITICAL" if is_fake else ("MODERATE" if prob > 30 else "LOW")
     risk_color = "#ef4444" if is_fake else ("#f59e0b" if prob > 30 else "#22c55e")
     verdict = "CRITICAL: Synthetic / AI-Cloned Voice Detected" if is_fake else "AUTHENTIC HUMAN VOICE"
-    recommendation = (
-        "HALT TRANSACTION IMMEDIATELY! Vocoder synthesis patterns identified."
-        if is_fake else
-        "Acoustic channel verified. Natural biological human vocal tract signatures confirmed."
-    )
 
     result = {
         "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
-        "filename": "Audio_Sample.wav",
+        "filename": file.filename or "audio_sample.wav",
         "probability": prob,
         "risk_level": risk_level,
         "risk_color": risk_color,
         "verdict": verdict,
-        "latency_ms": latency,
-        "recommendation": recommendation
+        "latency_ms": latency
     }
 
     history_db.append(result)
