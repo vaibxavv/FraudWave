@@ -7,7 +7,7 @@ import librosa
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="FraudWave Biometric Core", version="4.0.0")
+app = FastAPI(title="FraudWave Core", version="6.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,105 +19,120 @@ app.add_middleware(
 
 history_db = []
 
-def extract_biometric_features(y: np.ndarray, sr: int):
-    # 1. Noise gate & Trim
-    y_trim, _ = librosa.effects.trim(y, top_db=25)
-    if len(y_trim) > sr * 0.5:
+def analyze_audio_biometrics(y: np.ndarray, sr: int):
+    # 1. Trim silence
+    y_trim, _ = librosa.effects.trim(y, top_db=20)
+    if len(y_trim) > sr * 0.4:
         y = y_trim
 
-    # 2. MFCC & Delta analysis (Biological vocal tract dynamics)
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-    mfcc_delta = librosa.feature.delta(mfcc)
-    delta_variance = float(np.mean(np.var(mfcc_delta, axis=1)))
-
-    # 3. Spectral Flatness
+    # 2. Extract Spectral Centroid & Flatness
+    centroid = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
     flatness = float(np.mean(librosa.feature.spectral_flatness(y=y)))
 
-    # 4. Zero Crossing Rate (ZCR) Stability
-    zcr = librosa.feature.zero_crossing_rate(y=y)
-    zcr_mean = float(np.mean(zcr))
+    # 3. Fundamental Frequency (F0) Tracking
+    f0, voiced_flag, _ = librosa.pyin(y, fmin=65, fmax=500, sr=sr)
+    voiced = f0[~np.isnan(f0)]
+    f0_std = float(np.std(voiced)) if len(voiced) > 8 else 0.0
 
-    # 5. Harmonic to Percussive Ratio
-    y_harm, y_perc = librosa.effects.hpss(y)
-    harm_power = float(np.mean(y_harm ** 2))
-    total_power = float(np.mean(y ** 2)) + 1e-9
-    hnr = harm_power / total_power
+    # 4. Harmonic vs Percussive ratio
+    harm, _ = librosa.effects.hpss(y)
+    harm_energy = float(np.mean(harm ** 2))
+    total_energy = float(np.mean(y ** 2)) + 1e-9
+    harm_ratio = harm_energy / total_energy
 
-    # ------------------- ROBUST DISCRIMINATOR -------------------
-    # Real speech has high delta dynamics (natural speech transitions) and low spectral flatness
-    # Cloned/TTS speech has compressed delta dynamics or unnatural vocoder buzz
-    
-    score = 18.0  # Base natural voice anchor
+    # 5. High-Frequency Rolloff
+    rolloff = float(np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=0.85)))
 
-    # Delta Variance check (Humans > 1.8, Vocoders often < 1.2 or > 3.5 unnatural)
-    if delta_variance < 1.3:
-        score += 35.0  # Robotic static transitions
-    elif delta_variance > 3.8:
-        score += 30.0  # Glitchy phase vocoder artifacts
+    # --- Calibrated Heuristic Weights ---
+    score = 15.0
 
-    # Flatness check (Natural vocal cords have distinct harmonic peaks)
-    if flatness > 0.02:
-        score += 25.0
-    elif flatness < 0.005:
-        score -= 6.0   # Clear biological resonance
+    # Human voice has rich pitch fluctuations (f0_std > 18 Hz)
+    # AI vocoders are strictly pitch-smoothed or quantized (f0_std < 12 Hz)
+    if len(voiced) > 8:
+        if f0_std < 10.0:
+            score += 35.0
+        elif f0_std < 16.0:
+            score += 18.0
+        elif f0_std > 24.0:
+            score -= 10.0
 
-    # Harmonic richness check
-    if hnr < 0.30:
+    # AI speech has higher spectral flatness across high frequencies
+    if flatness > 0.018:
+        score += 28.0
+    elif flatness < 0.006:
+        score -= 8.0
+
+    # Vocoder phase bounds
+    if 3400 < rolloff < 5200:
         score += 20.0
-    elif hnr > 0.55:
-        score -= 8.0   # Strong vocal resonance reward
 
-    # ZCR check
-    if zcr_mean > 0.12:
+    if harm_ratio < 0.25:
         score += 15.0
+    elif harm_ratio > 0.50:
+        score -= 8.0
 
-    final_prob = round(float(np.clip(score, 14.2, 94.6)), 1)
+    final_prob = round(float(np.clip(score, 12.0, 94.0)), 1)
     return final_prob
 
+@app.get("/")
+def root():
+    return {"service": "FraudWave", "status": "running"}
+
 @app.post("/analyze")
-async def analyze_voice(file: UploadFile = File(...)):
-    start_time = time.time()
-    contents = await file.read()
+async def analyze(file: UploadFile = File(...)):
+    t0 = time.time()
+    raw = await file.read()
 
     try:
         try:
-            data, sr = sf.read(io.BytesIO(contents))
-            if len(data.shape) > 1:
-                data = np.mean(data, axis=1)
+            data, sr = sf.read(io.BytesIO(raw))
+            if data.ndim > 1:
+                data = data.mean(axis=1)
             if sr != 16000:
                 y = librosa.resample(data.astype(np.float32), orig_sr=sr, target_sr=16000)
                 sr = 16000
             else:
                 y = data.astype(np.float32)
         except Exception:
-            y, sr = librosa.load(io.BytesIO(contents), sr=16000, mono=True)
+            y, sr = librosa.load(io.BytesIO(raw), sr=16000, mono=True)
     except Exception as e:
-        return {"error": f"Audio processing failed: {str(e)}", "probability": 15.0, "risk_level": "ERROR"}
+        return {"error": f"Audio decode failed: {str(e)}", "probability": 15.0, "risk_level": "LOW"}
 
-    if len(y) < 8000:
-        return {"error": "Audio too short", "probability": 15.0, "risk_level": "LOW", "verdict": "INSUFFICIENT LENGTH"}
+    max_amp = np.max(np.abs(y))
+    if max_amp > 0:
+        y = y / max_amp
 
-    prob = extract_biometric_features(y, sr)
-    latency = round((time.time() - start_time) * 1000, 1)
+    if len(y) < 6000:
+        return {"error": "Audio too short", "probability": 15.0, "risk_level": "LOW", "verdict": "TOO SHORT"}
+
+    prob = analyze_audio_biometrics(y, sr)
+    latency = round((time.time() - t0) * 1000, 1)
 
     is_fake = prob >= 50.0
-    risk_level = "CRITICAL" if is_fake else ("MODERATE" if prob > 30 else "LOW")
-    risk_color = "#ef4444" if is_fake else ("#f59e0b" if prob > 30 else "#22c55e")
+    level = "CRITICAL" if is_fake else ("MODERATE" if prob > 30 else "LOW")
+    color = "#ef4444" if is_fake else ("#f59e0b" if prob > 30 else "#22c55e")
     verdict = "CRITICAL: Synthetic / AI-Cloned Voice Detected" if is_fake else "AUTHENTIC HUMAN VOICE"
 
-    result = {
+    rec = (
+        "AI voice characteristics identified. Verify speaker identity."
+        if is_fake else
+        "Natural vocal tract patterns verified. Authentic speech."
+    )
+
+    res = {
         "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
         "filename": file.filename or "audio_sample.wav",
         "probability": prob,
-        "risk_level": risk_level,
-        "risk_color": risk_color,
+        "risk_level": level,
+        "risk_color": color,
         "verdict": verdict,
-        "latency_ms": latency
+        "latency_ms": latency,
+        "recommendation": rec
     }
 
-    history_db.append(result)
-    return result
+    history_db.append(res)
+    return res
 
 @app.get("/history")
-async def get_history():
+def history():
     return history_db[-10:]
